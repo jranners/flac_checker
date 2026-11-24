@@ -1,33 +1,39 @@
 # TrueFLAC
 
-TrueFLAC is a macOS desktop application for inspecting FLAC metadata and finding
-spectral cutoffs that may indicate an upscaled lossy transcode. Drag FLAC files
-or folders into the app to analyze them; folder scans include nested directories.
+TrueFLAC is a fully client-side audio inspection app. It reads FLAC/WAV metadata
+from the file headers, decodes audio in the browser, and uses a TypeScript FFT
+to look for spectral cutoffs that can indicate a lossy transcode. Files are
+never uploaded.
 
-## Requirements
+## Local development
 
-- macOS 12 or later
-- Python 3.11+
-- Xcode Command Line Tools (for Python packages that need native builds)
-
-## Install and run
-
-If `soundfile` cannot find its audio backend, install `libsndfile` first:
+Requires Node.js 20 or newer.
 
 ```bash
-brew install libsndfile
+npm install
+npm run dev
 ```
 
-Then create an isolated environment and start the app:
+Create a production build with `npm run build`; preview it locally with
+`npm run preview`.
 
-```bash
-python3.11 -m venv .venv
-source .venv/bin/activate
-python -m pip install --upgrade pip
-pip install -r requirements.txt
-python main.py
-```
+## GitHub Pages deployment
 
-The analysis is heuristic: a spectral cutoff can flag a likely lossy source but
-cannot prove how a file was created. Quiet, bandwidth-limited, or unusual
-recordings may need manual review in the spectrogram.
+The GitHub Actions workflow at `.github/workflows/deploy.yml` builds and deploys
+on each push to `main` (and can also be started manually). In the repository's
+**Settings → Pages**, set the build and deployment source to **GitHub Actions**.
+Vite is configured with the project Pages URL base `/flac_checker/`.
+
+## Analysis notes
+
+FLAC STREAMINFO and WAV RIFF/fmt metadata are read directly from binary headers;
+other supported formats use browser decoding for metadata. Three representative
+audio segments are analyzed in a Web Worker. Cutoff patterns around 16 kHz,
+18.5 kHz, and 20.2 kHz are heuristic indicators, not proof of a file's history:
+recording, mastering, and source material also shape the spectrum. Browser codec
+support determines which audio formats can be decoded.
+
+## Previous desktop application
+
+The original Python/PySide6 application and its tests are preserved in
+[`legacy-desktop/`](legacy-desktop/).
