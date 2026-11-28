@@ -1,0 +1,5 @@
+{
+  "name": "TrueFLAC",
+  "description": "Lossless audio authenticity checker for inspecting FLAC metadata and detecting spectral cutoffs that indicate lossy transcodes.",
+  "requestFramePermissions": []
+}

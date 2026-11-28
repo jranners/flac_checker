@@ -1,2 +1,23 @@
+# Dependencies & Build
+node_modules/
+dist/
+*.tsbuildinfo
+
+# Local env & caches
+.env
+.env.local
+.env.*.local
+.vite/
+
+# Playwright & test artifacts
+.playwright-cli/
+
+# Legacy Python artifacts
 __pycache__/
 *.py[cod]
+.venv/
+venv/
+
+# OS
+.DS_Store
+Thumbs.db
