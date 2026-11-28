@@ -8,6 +8,7 @@ import {
   Trash2,
 } from 'lucide-react';
 import { useState } from 'react';
+import { computeQueueProgress } from '../dsp/queueProgress';
 import { VERDICT_META, type QueueItem } from '../dsp/types';
 
 interface BatchSidebarProps {
@@ -48,70 +49,103 @@ export function BatchSidebar({
   onClearAll,
 }: BatchSidebarProps) {
   const [mobileExpanded, setMobileExpanded] = useState(true);
-  const completedCount = items.filter(
-    (i) => i.state === 'done' || i.state === 'rejected' || i.state === 'error',
-  ).length;
+  const progress = computeQueueProgress(items);
 
   return (
     <aside
       aria-label="Track queue"
       className="glass-panel flex w-full flex-col rounded-3xl lg:sticky lg:top-[72px] lg:max-h-[calc(100vh-92px)] lg:w-[320px] xl:w-[344px] lg:shrink-0"
     >
-      {/* Sidebar Toolbar */}
-      <div className="flex items-center justify-between gap-2 border-b border-black/[0.06] px-4 py-3 dark:border-white/[0.08]">
-        <div className="flex items-center gap-2 min-w-0">
-          <h2 className="text-[13px] font-semibold tracking-tight text-[#1D1D1F] dark:text-[#F5F5F7] whitespace-nowrap">
-            Queue
-          </h2>
-          <span className="text-[12px] text-[#86868B] dark:text-[#8E8E93] tabular-nums">
-            {items.length}
-          </span>
-          <button
-            type="button"
-            onClick={() => setMobileExpanded((prev) => !prev)}
-            aria-expanded={mobileExpanded}
-            aria-label={mobileExpanded ? 'Collapse queue list' : 'Expand queue list'}
-            className="ml-1 inline-flex h-7 w-7 items-center justify-center rounded-full text-[#6E6E73] hover:bg-black/[0.05] dark:text-[#98989D] dark:hover:bg-white/[0.08] lg:hidden"
-          >
-            {mobileExpanded ? (
-              <ChevronUp className="h-4 w-4" strokeWidth={1.5} />
-            ) : (
-              <ChevronDown className="h-4 w-4" strokeWidth={1.5} />
-            )}
-          </button>
+      {/* Sidebar Top Header & Aggregate Progress */}
+      <div className="border-b border-black/[0.06] px-4 py-3 dark:border-white/[0.08]">
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2 min-w-0">
+            <h2 className="text-[13px] font-semibold tracking-tight text-[#1D1D1F] dark:text-[#F5F5F7] whitespace-nowrap">
+              Queue
+            </h2>
+            <span className="text-[12px] text-[#86868B] dark:text-[#8E8E93] tabular-nums">
+              {items.length}
+            </span>
+            <button
+              type="button"
+              onClick={() => setMobileExpanded((prev) => !prev)}
+              aria-expanded={mobileExpanded}
+              aria-label={mobileExpanded ? 'Collapse queue list' : 'Expand queue list'}
+              className="ml-1 inline-flex h-7 w-7 items-center justify-center rounded-full text-[#6E6E73] hover:bg-black/[0.05] dark:text-[#98989D] dark:hover:bg-white/[0.08] lg:hidden"
+            >
+              {mobileExpanded ? (
+                <ChevronUp className="h-4 w-4" strokeWidth={1.5} />
+              ) : (
+                <ChevronDown className="h-4 w-4" strokeWidth={1.5} />
+              )}
+            </button>
+          </div>
+
+          <div className="flex items-center gap-1.5 shrink-0">
+            <button
+              type="button"
+              onClick={onAddFiles}
+              className="inline-flex h-8 items-center gap-1 rounded-full bg-[#1D1D1F] px-3 text-[12px] font-medium text-white transition-all duration-200 hover:bg-[#323236] focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[#0A84FF] dark:bg-[#F5F5F7] dark:text-[#0B0B0E] dark:hover:bg-white whitespace-nowrap"
+            >
+              <Plus className="h-3.5 w-3.5" strokeWidth={1.5} aria-hidden="true" />
+              <span>Add</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={onExportCsv}
+              disabled={progress.completed === 0}
+              aria-label="Export CSV report"
+              className="inline-flex h-8 items-center gap-1 rounded-full border border-black/[0.08] bg-white/60 px-2.5 text-[12px] font-medium text-[#1D1D1F] transition-all duration-200 hover:bg-white disabled:cursor-not-allowed disabled:opacity-40 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[#0A84FF] dark:border-white/[0.1] dark:bg-white/[0.06] dark:text-[#F5F5F7] dark:hover:bg-white/[0.12] whitespace-nowrap"
+            >
+              <Download className="h-3.5 w-3.5" strokeWidth={1.5} aria-hidden="true" />
+              <span>Export CSV</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={onClearAll}
+              aria-label="Clear queue"
+              title="Clear queue"
+              className="inline-flex h-8 w-8 items-center justify-center rounded-full text-[#6E6E73] transition-colors duration-200 hover:bg-black/[0.05] hover:text-[#FF453A] focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[#0A84FF] dark:text-[#8E8E93] dark:hover:bg-white/[0.08] dark:hover:text-[#FF453A]"
+            >
+              <Trash2 className="h-3.5 w-3.5" strokeWidth={1.5} />
+            </button>
+          </div>
         </div>
 
-        <div className="flex items-center gap-1.5 shrink-0">
-          <button
-            type="button"
-            onClick={onAddFiles}
-            className="inline-flex h-8 items-center gap-1 rounded-full bg-[#1D1D1F] px-3 text-[12px] font-medium text-white transition-all duration-200 hover:bg-[#323236] focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[#0A84FF] dark:bg-[#F5F5F7] dark:text-[#0B0B0E] dark:hover:bg-white whitespace-nowrap"
-          >
-            <Plus className="h-3.5 w-3.5" strokeWidth={1.5} aria-hidden="true" />
-            <span>Add</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={onExportCsv}
-            disabled={completedCount === 0}
-            aria-label="Export CSV report"
-            className="inline-flex h-8 items-center gap-1 rounded-full border border-black/[0.08] bg-white/60 px-2.5 text-[12px] font-medium text-[#1D1D1F] transition-all duration-200 hover:bg-white disabled:cursor-not-allowed disabled:opacity-40 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[#0A84FF] dark:border-white/[0.1] dark:bg-white/[0.06] dark:text-[#F5F5F7] dark:hover:bg-white/[0.12] whitespace-nowrap"
-          >
-            <Download className="h-3.5 w-3.5" strokeWidth={1.5} aria-hidden="true" />
-            <span>Export CSV</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={onClearAll}
-            aria-label="Clear queue"
-            title="Clear queue"
-            className="inline-flex h-8 w-8 items-center justify-center rounded-full text-[#6E6E73] transition-colors duration-200 hover:bg-black/[0.05] hover:text-[#FF453A] focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[#0A84FF] dark:text-[#8E8E93] dark:hover:bg-white/[0.08] dark:hover:text-[#FF453A]"
-          >
-            <Trash2 className="h-3.5 w-3.5" strokeWidth={1.5} />
-          </button>
-        </div>
+        {/* Global Queue Completion Progress Bar */}
+        {progress.total > 0 && (
+          <div className="mt-3">
+            <div className="mb-1.5 flex items-center justify-between gap-2 text-[11px]">
+              <span className="font-medium text-[#6E6E73] dark:text-[#98989D] tabular-nums">
+                {progress.isComplete
+                  ? `Completed ${progress.completed} of ${progress.total}`
+                  : `Processing ${progress.completed} of ${progress.total}`}
+              </span>
+              <span className="font-semibold text-[#1D1D1F] dark:text-[#F5F5F7] tabular-nums">
+                {progress.percent}%
+              </span>
+            </div>
+            <div
+              role="progressbar"
+              aria-label="Queue processing progress"
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={progress.percent}
+              className="h-1.5 w-full overflow-hidden rounded-full bg-black/[0.07] dark:bg-white/[0.1]"
+            >
+              <div
+                className={`h-full w-full origin-left rounded-full transition-transform duration-300 ease-out ${
+                  progress.isComplete
+                    ? 'bg-[#30D158]'
+                    : 'bg-[#0A84FF]'
+                }`}
+                style={{ transform: `scaleX(${progress.percent / 100})` }}
+              />
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Queue List */}
