@@ -36,6 +36,40 @@ export function App() {
     root.style.colorScheme = theme;
   }, [theme]);
 
+  // Global keyboard shortcuts: Cmd/Ctrl+O to open files, ArrowUp/ArrowDown to step queue
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'o') {
+        event.preventDefault();
+        fileInputRef.current?.click();
+        return;
+      }
+      if (queue.length <= 1) return;
+      const target = event.target as HTMLElement | null;
+      if (
+        target &&
+        (target.tagName === 'INPUT' ||
+          target.tagName === 'TEXTAREA' ||
+          target.isContentEditable ||
+          target.closest('[role="listbox"]'))
+      ) {
+        return;
+      }
+      if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
+      event.preventDefault();
+      const idx = queue.findIndex((item) => item.id === selectedId);
+      const current = idx >= 0 ? idx : 0;
+      const nextIdx =
+        event.key === 'ArrowDown'
+          ? (current + 1) % queue.length
+          : (current - 1 + queue.length) % queue.length;
+      const nextItem = queue[nextIdx];
+      if (nextItem) setSelectedId(nextItem.id);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [queue, selectedId]);
+
   const updateItem = useCallback(
     (id: string, patch: Partial<QueueItem>) => {
       setQueue((prev) =>
@@ -98,7 +132,7 @@ export function App() {
 
       setSelectedId((prev) => prev ?? newItems[0]?.id ?? null);
 
-      // Process with bounded concurrency (2 files at a time) to keep RAM footprint lean
+      // Process with bounded concurrency (2 files at a time)
       const pending = [...newItems];
       const concurrency = 2;
 
@@ -230,18 +264,32 @@ export function App() {
 
   const selectedItem =
     queue.find((item) => item.id === selectedId) ?? queue[0] ?? null;
+  const hasExportable = queue.some(
+    (item) =>
+      item.state === 'done' ||
+      item.state === 'rejected' ||
+      item.state === 'error',
+  );
 
   return (
     <div
-      className="trueflac-canvas relative flex min-h-screen flex-col text-[#1D1D1F] transition-colors duration-200 dark:text-[#F5F5F7]"
+      className="relative flex min-h-screen flex-col bg-[#F5F5F7] text-[#111113] dark:bg-[#09090B] dark:text-[#F4F4F5]"
       onDragEnter={handleDragEnter}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
     >
-      <TopBar theme={theme} onThemeChange={setTheme} />
+      <TopBar
+        theme={theme}
+        onThemeChange={setTheme}
+        hasFiles={queue.length > 0}
+        hasExportable={hasExportable}
+        onAddFiles={handleChooseFiles}
+        onExportCsv={handleExportCsv}
+        onClearAll={handleClearAll}
+      />
 
-      {/* Hidden native file input (accepts any file so disguised files are caught by zero-trust magic-byte validator) */}
+      {/* Hidden native file input */}
       <input
         ref={fileInputRef}
         type="file"
@@ -254,16 +302,16 @@ export function App() {
       />
 
       {batchNotice && (
-        <div className="mx-auto w-full max-w-[1360px] px-4 pt-2 sm:px-6">
+        <div className="mx-auto w-full max-w-[1440px] px-4 pt-3 sm:px-5">
           <div
             role="status"
-            className="glass-panel flex items-center justify-between gap-3 rounded-2xl px-4 py-2.5 text-[13px] text-[#515154] dark:text-[#D1D1D6]"
+            className="flex items-center justify-between gap-3 rounded-xl border border-black/[0.08] bg-white px-3.5 py-2 text-[12.5px] text-zinc-700 dark:border-white/[0.08] dark:bg-[#111113] dark:text-zinc-300"
           >
             <span>{batchNotice}</span>
             <button
               type="button"
               onClick={() => setBatchNotice(null)}
-              className="text-[12px] font-medium text-[#0A84FF] hover:underline whitespace-nowrap"
+              className="text-[12px] font-medium text-zinc-900 underline-offset-2 hover:underline dark:text-zinc-100 whitespace-nowrap cursor-pointer"
             >
               Dismiss
             </button>
@@ -271,36 +319,33 @@ export function App() {
         </div>
       )}
 
-      <main className="mx-auto flex w-full max-w-[1360px] flex-1 flex-col">
+      <main className="mx-auto flex w-full max-w-[1440px] flex-1 flex-col">
         {queue.length === 0 ? (
           <HeroDropzone
             isDragging={isDragging}
             onChooseFiles={handleChooseFiles}
           />
         ) : (
-          <div className="flex flex-1 flex-col gap-4 px-4 pt-3 pb-8 sm:px-6 lg:flex-row lg:items-start">
+          <div className="flex flex-1 flex-col gap-3 px-4 py-3.5 sm:px-5 lg:flex-row lg:items-start">
             <BatchSidebar
               items={queue}
               selectedId={selectedItem?.id ?? null}
               onSelect={setSelectedId}
-              onAddFiles={handleChooseFiles}
-              onExportCsv={handleExportCsv}
-              onClearAll={handleClearAll}
             />
             <DetailPane item={selectedItem} theme={theme} />
           </div>
         )}
       </main>
 
-      {/* Subtle full-window drag overlay when workspace already has files */}
+      {/* Drag-and-drop overlay when workspace already has files */}
       {isDragging && queue.length > 0 && (
-        <div className="pointer-events-none fixed inset-0 z-40 flex items-center justify-center bg-black/20 backdrop-blur-sm dark:bg-black/45">
-          <div className="glass-panel rounded-3xl px-8 py-6 text-center">
-            <p className="text-[17px] font-semibold tracking-tight text-[#1D1D1F] dark:text-[#F5F5F7]">
+        <div className="pointer-events-none fixed inset-0 z-40 flex items-center justify-center bg-black/30 backdrop-blur-xs dark:bg-black/55">
+          <div className="rounded-xl border border-black/[0.12] bg-white px-7 py-5 text-center dark:border-white/[0.14] dark:bg-[#111113]">
+            <p className="text-[14px] font-medium text-zinc-900 dark:text-zinc-100">
               Drop audio files to add to queue
             </p>
-            <p className="mt-1 text-[13px] text-[#6E6E73] dark:text-[#98989D]">
-              Verified locally via zero-trust header inspection
+            <p className="mt-1 font-mono text-[11px] text-zinc-500">
+              Verified locally via magic-byte header inspection
             </p>
           </div>
         </div>

@@ -7,6 +7,8 @@ interface FrequencyCurveCanvasProps {
   effectiveNyquistKhz: number;
   cutoffKhz: number | null;
   theme: ThemeMode;
+  zoomHf: boolean;
+  compact?: boolean;
 }
 
 interface CurveHover {
@@ -14,24 +16,36 @@ interface CurveHover {
   freqKhz: number;
   p95Db: number;
   meanDb: number;
+  expectedDb: number;
 }
 
-const PAD_LEFT = 48;
-const PAD_RIGHT = 20;
-const PAD_TOP = 18;
-const PAD_BOTTOM = 32;
-const MIN_DB = -125;
+const PAD_LEFT = 46;
+const PAD_RIGHT = 18;
+const PAD_TOP = 16;
+const PAD_BOTTOM = 28;
+const MIN_DB = -135;
 const MAX_DB = -5;
+
+function getFreqRange(effectiveNyquistKhz: number, zoomHf: boolean): { minKhz: number; maxKhz: number } {
+  if (!zoomHf) {
+    return { minKhz: 0, maxKhz: effectiveNyquistKhz };
+  }
+  const maxKhz = Math.min(24, effectiveNyquistKhz);
+  const minKhz = Math.min(12, Math.max(0, maxKhz - 6));
+  return { minKhz, maxKhz };
+}
 
 export function FrequencyCurveCanvas({
   psdCurve,
   effectiveNyquistKhz,
   cutoffKhz,
   theme,
+  zoomHf,
+  compact = false,
 }: FrequencyCurveCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const [size, setSize] = useState({ width: 760, height: 340 });
+  const [size, setSize] = useState({ width: 780, height: compact ? 240 : 390 });
   const [hover, setHover] = useState<CurveHover | null>(null);
 
   useEffect(() => {
@@ -40,13 +54,19 @@ export function FrequencyCurveCanvas({
     const observer = new ResizeObserver((entries) => {
       for (const entry of entries) {
         const w = Math.max(280, Math.floor(entry.contentRect.width));
-        const h = w < 520 ? 270 : 340;
+        const h = compact
+          ? w < 520
+            ? 200
+            : 240
+          : w < 520
+            ? 280
+            : 390;
         setSize({ width: w, height: h });
       }
     });
     observer.observe(el);
     return () => observer.disconnect();
-  }, []);
+  }, [compact]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -63,19 +83,22 @@ export function FrequencyCurveCanvas({
 
     const plotW = Math.max(40, size.width - PAD_LEFT - PAD_RIGHT);
     const plotH = Math.max(40, size.height - PAD_TOP - PAD_BOTTOM);
+    const { minKhz, maxKhz } = getFreqRange(effectiveNyquistKhz, zoomHf);
+    const freqSpan = Math.max(0.5, maxKhz - minKhz);
     const isDark = theme === 'dark';
 
-    const bgFill = isDark ? 'rgba(0, 0, 0, 0.36)' : 'rgba(255, 255, 255, 0.65)';
-    const gridColor = isDark ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.07)';
-    const borderColor = isDark ? 'rgba(255, 255, 255, 0.12)' : 'rgba(0, 0, 0, 0.1)';
-    const labelColor = isDark ? 'rgba(245, 245, 247, 0.56)' : 'rgba(29, 29, 31, 0.58)';
-    const p95Stroke = isDark ? '#64D2FF' : '#0071E3';
-    const meanStroke = isDark ? 'rgba(245, 245, 247, 0.38)' : 'rgba(29, 29, 31, 0.32)';
+    const bgFill = isDark ? '#0B0B0D' : '#FAFAFB';
+    const gridColor = isDark ? 'rgba(255, 255, 255, 0.065)' : 'rgba(0, 0, 0, 0.06)';
+    const borderColor = isDark ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.1)';
+    const labelColor = isDark ? 'rgba(161, 161, 170, 0.85)' : 'rgba(82, 82, 91, 0.85)';
+    const p95Stroke = isDark ? '#F4F4F5' : '#18181B';
+    const meanStroke = isDark ? 'rgba(161, 161, 170, 0.42)' : 'rgba(113, 113, 122, 0.4)';
+    const expectedStroke = isDark ? 'rgba(161, 161, 170, 0.55)' : 'rgba(82, 82, 91, 0.48)';
+    const monoFont = '500 10px ui-monospace, SFMono-Regular, Menlo, monospace';
 
     ctx.clearRect(0, 0, size.width, size.height);
 
-    const mapX = (khz: number) =>
-      PAD_LEFT + Math.max(0, Math.min(1, khz / effectiveNyquistKhz)) * plotW;
+    const mapX = (khz: number) => PAD_LEFT + ((khz - minKhz) / freqSpan) * plotW;
     const mapY = (db: number) =>
       PAD_TOP +
       (1 - Math.max(0, Math.min(1, (db - MIN_DB) / (MAX_DB - MIN_DB)))) * plotH;
@@ -83,7 +106,7 @@ export function FrequencyCurveCanvas({
     // Clipped plot surface
     ctx.save();
     ctx.beginPath();
-    ctx.roundRect(PAD_LEFT, PAD_TOP, plotW, plotH, 10);
+    ctx.roundRect(PAD_LEFT, PAD_TOP, plotW, plotH, 6);
     ctx.fillStyle = bgFill;
     ctx.fill();
     ctx.clip();
@@ -101,8 +124,10 @@ export function FrequencyCurveCanvas({
     }
 
     // Vertical kHz gridlines
-    const freqStep = effectiveNyquistKhz > 30 ? 8 : effectiveNyquistKhz > 24 ? 6 : 4;
-    for (let f = freqStep; f < effectiveNyquistKhz; f += freqStep) {
+    const freqStep = zoomHf ? 2 : effectiveNyquistKhz > 30 ? 8 : effectiveNyquistKhz > 24 ? 6 : 4;
+    const firstGrid = Math.ceil(minKhz / freqStep) * freqStep;
+    for (let f = firstGrid; f < maxKhz; f += freqStep) {
+      if (Math.abs(f - minKhz) < 0.25) continue;
       const x = mapX(f);
       ctx.beginPath();
       ctx.moveTo(x, PAD_TOP);
@@ -110,89 +135,141 @@ export function FrequencyCurveCanvas({
       ctx.stroke();
     }
 
-    const { frequenciesKhz, p95Db, meanDb } = psdCurve;
+    const { frequenciesKhz, p95Db, meanDb, expectedDb } = psdCurve;
     const n = frequenciesKhz.length;
 
     if (n > 1) {
-      // Subtle area under P95 curve
+      // Subtle monochrome fill under P95 curve
       const areaGrad = ctx.createLinearGradient(0, PAD_TOP, 0, PAD_TOP + plotH);
       if (isDark) {
-        areaGrad.addColorStop(0, 'rgba(100, 210, 255, 0.20)');
-        areaGrad.addColorStop(1, 'rgba(100, 210, 255, 0.01)');
+        areaGrad.addColorStop(0, 'rgba(244, 244, 245, 0.12)');
+        areaGrad.addColorStop(1, 'rgba(244, 244, 245, 0.01)');
       } else {
-        areaGrad.addColorStop(0, 'rgba(0, 113, 227, 0.14)');
-        areaGrad.addColorStop(1, 'rgba(0, 113, 227, 0.01)');
+        areaGrad.addColorStop(0, 'rgba(24, 24, 27, 0.09)');
+        areaGrad.addColorStop(1, 'rgba(24, 24, 27, 0.01)');
       }
 
       ctx.beginPath();
-      ctx.moveTo(mapX(frequenciesKhz[0]), PAD_TOP + plotH);
+      let started = false;
+      let lastX = PAD_LEFT;
       for (let i = 0; i < n; i++) {
-        ctx.lineTo(mapX(frequenciesKhz[i]), mapY(p95Db[i]));
+        const f = frequenciesKhz[i];
+        if (f < minKhz - 0.5 || f > maxKhz + 0.5) continue;
+        const x = mapX(f);
+        const y = mapY(p95Db[i]);
+        if (!started) {
+          ctx.moveTo(x, PAD_TOP + plotH);
+          ctx.lineTo(x, y);
+          started = true;
+        } else {
+          ctx.lineTo(x, y);
+        }
+        lastX = x;
       }
-      ctx.lineTo(mapX(frequenciesKhz[n - 1]), PAD_TOP + plotH);
-      ctx.closePath();
-      ctx.fillStyle = areaGrad;
-      ctx.fill();
+      if (started) {
+        ctx.lineTo(lastX, PAD_TOP + plotH);
+        ctx.closePath();
+        ctx.fillStyle = areaGrad;
+        ctx.fill();
+      }
 
-      // Mean PSD curve (subtle)
+      // Extrapolated 4-13 kHz natural slope model (dashed)
+      if (expectedDb && expectedDb.length === n) {
+        ctx.save();
+        ctx.beginPath();
+        let expStarted = false;
+        for (let i = 0; i < n; i++) {
+          const f = frequenciesKhz[i];
+          if (f < Math.max(4.0, minKhz - 0.5) || f > maxKhz + 0.5) continue;
+          const x = mapX(f);
+          const y = mapY(expectedDb[i]);
+          if (!expStarted) {
+            ctx.moveTo(x, y);
+            expStarted = true;
+          } else {
+            ctx.lineTo(x, y);
+          }
+        }
+        ctx.strokeStyle = expectedStroke;
+        ctx.lineWidth = 1;
+        ctx.setLineDash([4, 4]);
+        ctx.stroke();
+        ctx.restore();
+      }
+
+      // Mean PSD curve
       ctx.beginPath();
+      let meanStarted = false;
       for (let i = 0; i < n; i++) {
-        const x = mapX(frequenciesKhz[i]);
+        const f = frequenciesKhz[i];
+        if (f < minKhz - 0.5 || f > maxKhz + 0.5) continue;
+        const x = mapX(f);
         const y = mapY(meanDb[i]);
-        if (i === 0) ctx.moveTo(x, y);
-        else ctx.lineTo(x, y);
+        if (!meanStarted) {
+          ctx.moveTo(x, y);
+          meanStarted = true;
+        } else {
+          ctx.lineTo(x, y);
+        }
       }
       ctx.strokeStyle = meanStroke;
-      ctx.lineWidth = 1.25;
+      ctx.lineWidth = 1.15;
       ctx.stroke();
 
-      // P95 PSD curve (prominent)
+      // P95 PSD envelope (primary crisp line)
       ctx.beginPath();
+      let p95Started = false;
       for (let i = 0; i < n; i++) {
-        const x = mapX(frequenciesKhz[i]);
+        const f = frequenciesKhz[i];
+        if (f < minKhz - 0.5 || f > maxKhz + 0.5) continue;
+        const x = mapX(f);
         const y = mapY(p95Db[i]);
-        if (i === 0) ctx.moveTo(x, y);
-        else ctx.lineTo(x, y);
+        if (!p95Started) {
+          ctx.moveTo(x, y);
+          p95Started = true;
+        } else {
+          ctx.lineTo(x, y);
+        }
       }
       ctx.strokeStyle = p95Stroke;
-      ctx.lineWidth = 1.85;
+      ctx.lineWidth = 1.65;
       ctx.stroke();
     }
 
-    // Annotated cutoff vertical marker
-    if (cutoffKhz !== null && cutoffKhz > 0 && cutoffKhz < effectiveNyquistKhz) {
+    // Annotated cutoff hairline marker
+    if (cutoffKhz !== null && cutoffKhz > minKhz && cutoffKhz < maxKhz) {
       const cx = mapX(cutoffKhz);
       ctx.save();
-      ctx.strokeStyle = '#FF9F0A';
-      ctx.lineWidth = 1.35;
-      ctx.setLineDash([5, 4]);
+      ctx.strokeStyle = '#F59E0B';
+      ctx.lineWidth = 1.25;
+      ctx.setLineDash([4, 3]);
       ctx.beginPath();
       ctx.moveTo(cx, PAD_TOP);
       ctx.lineTo(cx, PAD_TOP + plotH);
       ctx.stroke();
       ctx.restore();
 
-      const label = `Cutoff ${cutoffKhz.toFixed(1)} kHz`;
-      ctx.font = '500 11px -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif';
-      const tw = ctx.measureText(label).width + 14;
-      const lx = Math.max(PAD_LEFT + 8, Math.min(PAD_LEFT + plotW - tw - 8, cx - tw / 2));
-      ctx.fillStyle = isDark ? 'rgba(20, 20, 24, 0.85)' : 'rgba(255, 255, 255, 0.92)';
+      const label = `CUTOFF ${cutoffKhz.toFixed(1)} kHz`;
+      ctx.font = monoFont;
+      const tw = ctx.measureText(label).width + 12;
+      const lx = Math.max(PAD_LEFT + 6, Math.min(PAD_LEFT + plotW - tw - 6, cx - tw / 2));
+      ctx.fillStyle = isDark ? 'rgba(18, 18, 21, 0.9)' : 'rgba(255, 255, 255, 0.94)';
       ctx.beginPath();
-      ctx.roundRect(lx, PAD_TOP + 10, tw, 20, 10);
+      ctx.roundRect(lx, PAD_TOP + 8, tw, 18, 4);
       ctx.fill();
-      ctx.strokeStyle = 'rgba(255, 159, 10, 0.5)';
+      ctx.strokeStyle = 'rgba(245, 158, 11, 0.55)';
       ctx.lineWidth = 1;
       ctx.stroke();
-      ctx.fillStyle = isDark ? '#FFD180' : '#B26A00';
+      ctx.fillStyle = isDark ? '#FCD34D' : '#B45309';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      ctx.fillText(label, lx + tw / 2, PAD_TOP + 20.5);
+      ctx.fillText(label, lx + tw / 2, PAD_TOP + 17.5);
     }
 
-    // Hover crosshair + dots
+    // Hover crosshair + sample points
     if (hover) {
       ctx.save();
-      ctx.strokeStyle = isDark ? 'rgba(255,255,255,0.32)' : 'rgba(0,0,0,0.24)';
+      ctx.strokeStyle = isDark ? 'rgba(255, 255, 255, 0.3)' : 'rgba(0, 0, 0, 0.25)';
       ctx.lineWidth = 1;
       ctx.setLineDash([2, 3]);
       ctx.beginPath();
@@ -201,57 +278,54 @@ export function FrequencyCurveCanvas({
       ctx.stroke();
       ctx.restore();
 
-      // P95 dot
       ctx.beginPath();
-      ctx.arc(hover.x, mapY(hover.p95Db), 4, 0, Math.PI * 2);
+      ctx.arc(hover.x, mapY(hover.p95Db), 3.5, 0, Math.PI * 2);
       ctx.fillStyle = p95Stroke;
       ctx.fill();
-      ctx.strokeStyle = isDark ? '#0B0B0E' : '#FFFFFF';
+      ctx.strokeStyle = isDark ? '#0B0B0D' : '#FFFFFF';
       ctx.lineWidth = 1.5;
       ctx.stroke();
 
-      // Mean dot
       ctx.beginPath();
-      ctx.arc(hover.x, mapY(hover.meanDb), 3, 0, Math.PI * 2);
+      ctx.arc(hover.x, mapY(hover.meanDb), 2.5, 0, Math.PI * 2);
       ctx.fillStyle = meanStroke;
       ctx.fill();
     }
 
     ctx.restore();
 
-    // Outer frame
+    // Outer hairline border
     ctx.strokeStyle = borderColor;
     ctx.lineWidth = 1;
     ctx.beginPath();
-    ctx.roundRect(PAD_LEFT, PAD_TOP, plotW, plotH, 10);
+    ctx.roundRect(PAD_LEFT, PAD_TOP, plotW, plotH, 6);
     ctx.stroke();
 
     // Y-axis dBFS labels
-    ctx.font = '500 10px -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif';
+    ctx.font = monoFont;
     ctx.fillStyle = labelColor;
     ctx.textAlign = 'right';
     ctx.textBaseline = 'middle';
-    ctx.fillText('dBFS', PAD_LEFT - 8, PAD_TOP - 8);
-    ctx.font = '500 11px -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif';
+    ctx.fillText('dB', PAD_LEFT - 7, PAD_TOP - 7);
     for (const db of dbTicks) {
-      ctx.fillText(`${db}`, PAD_LEFT - 8, mapY(db));
+      ctx.fillText(`${db}`, PAD_LEFT - 7, mapY(db));
     }
 
     // X-axis kHz labels
     ctx.textAlign = 'center';
     ctx.textBaseline = 'top';
-    const xTicks: number[] = [0];
-    for (let f = freqStep; f < effectiveNyquistKhz - freqStep * 0.65; f += freqStep) {
-      xTicks.push(f);
+    const xTicks: number[] = [minKhz];
+    for (let f = firstGrid; f < maxKhz - freqStep * 0.45; f += freqStep) {
+      if (f > minKhz + freqStep * 0.4) xTicks.push(f);
     }
-    xTicks.push(effectiveNyquistKhz);
+    xTicks.push(maxKhz);
     for (const f of xTicks) {
-      const text = f === effectiveNyquistKhz ? `${f.toFixed(1)}k` : `${Math.round(f)}k`;
-      ctx.fillText(text, mapX(f), PAD_TOP + plotH + 9);
+      const text = Math.abs(f - Math.round(f)) > 0.05 ? `${f.toFixed(1)}k` : `${Math.round(f)}k`;
+      ctx.fillText(text, mapX(f), PAD_TOP + plotH + 8);
     }
 
     ctx.restore();
-  }, [size, psdCurve, effectiveNyquistKhz, cutoffKhz, theme, hover]);
+  }, [size, psdCurve, effectiveNyquistKhz, cutoffKhz, theme, zoomHf, hover]);
 
   const handlePointerMove = (event: React.MouseEvent<HTMLCanvasElement>) => {
     const rect = event.currentTarget.getBoundingClientRect();
@@ -262,11 +336,11 @@ export function FrequencyCurveCanvas({
       return;
     }
 
-    const freqKhz = ((x - PAD_LEFT) / plotW) * effectiveNyquistKhz;
-    const { frequenciesKhz, p95Db, meanDb } = psdCurve;
+    const { minKhz, maxKhz } = getFreqRange(effectiveNyquistKhz, zoomHf);
+    const freqKhz = minKhz + ((x - PAD_LEFT) / plotW) * (maxKhz - minKhz);
+    const { frequenciesKhz, p95Db, meanDb, expectedDb } = psdCurve;
     if (frequenciesKhz.length === 0) return;
 
-    // Binary search nearest frequency bin
     let lo = 0;
     let hi = frequenciesKhz.length - 1;
     while (lo < hi) {
@@ -280,20 +354,25 @@ export function FrequencyCurveCanvas({
       freqKhz: frequenciesKhz[lo],
       p95Db: p95Db[lo],
       meanDb: meanDb[lo],
+      expectedDb: expectedDb?.[lo] ?? p95Db[lo],
     });
   };
 
   return (
     <div ref={containerRef} className="relative w-full select-none">
-      {/* Compact inline legend */}
-      <div className="mb-2 flex items-center justify-end gap-4 px-2 text-[11px] font-medium text-[#6E6E73] dark:text-[#98989D]">
+      {/* Quiet inline legend */}
+      <div className="mb-1.5 flex items-center justify-end gap-4 px-2 font-mono text-[10px] text-zinc-500">
         <span className="inline-flex items-center gap-1.5">
-          <span className="h-[2px] w-3.5 rounded-full bg-[#0071E3] dark:bg-[#64D2FF]" aria-hidden="true" />
-          P95 Envelope
+          <span className="h-[2px] w-3 bg-zinc-900 dark:bg-zinc-100" aria-hidden="true" />
+          P95
         </span>
         <span className="inline-flex items-center gap-1.5">
-          <span className="h-[2px] w-3.5 rounded-full bg-[#1D1D1F]/35 dark:bg-[#F5F5F7]/40" aria-hidden="true" />
-          Mean PSD
+          <span className="h-[1.5px] w-3 bg-zinc-400/60" aria-hidden="true" />
+          Mean
+        </span>
+        <span className="inline-flex items-center gap-1.5">
+          <span className="w-3 border-t border-dashed border-zinc-500" aria-hidden="true" />
+          4–13k Model
         </span>
       </div>
 
@@ -304,18 +383,22 @@ export function FrequencyCurveCanvas({
         onMouseMove={handlePointerMove}
         onMouseLeave={() => setHover(null)}
         className="block w-full cursor-crosshair"
-        aria-label="P95 and Mean power spectral density curve"
+        aria-label="P95, Mean, and extrapolated natural slope power spectral density curves"
       />
 
       {hover && (
-        <div className="pointer-events-none absolute top-9 left-14 z-10 inline-flex items-center gap-2 rounded-full border border-black/[0.08] bg-white/88 px-3 py-1 text-[11px] font-medium text-[#1D1D1F] shadow-md backdrop-blur-xl dark:border-white/15 dark:bg-[#141418]/86 dark:text-[#F5F5F7] tabular-nums">
+        <div className="pointer-events-none absolute top-8 left-14 z-10 inline-flex items-center gap-2 rounded-md border border-black/[0.08] bg-white/88 px-2.5 py-1 font-mono text-[11px] text-zinc-900 backdrop-blur-md dark:border-white/[0.1] dark:bg-[#111113]/85 dark:text-zinc-100 tabular-nums">
           <span>{hover.freqKhz.toFixed(2)} kHz</span>
-          <span className="opacity-40" aria-hidden="true">·</span>
-          <span className="text-[#0071E3] dark:text-[#64D2FF]">
-            P95 {hover.p95Db.toFixed(1)} dB
-          </span>
-          <span className="opacity-40" aria-hidden="true">·</span>
-          <span className="opacity-75">Mean {hover.meanDb.toFixed(1)} dB</span>
+          <span className="text-zinc-400" aria-hidden="true">·</span>
+          <span>P95 {hover.p95Db.toFixed(1)} dB</span>
+          <span className="text-zinc-400" aria-hidden="true">·</span>
+          <span className="text-zinc-500 dark:text-zinc-400">Mean {hover.meanDb.toFixed(1)} dB</span>
+          {hover.freqKhz >= 4.0 && (
+            <>
+              <span className="text-zinc-400" aria-hidden="true">·</span>
+              <span className="text-zinc-500 dark:text-zinc-400">Exp {hover.expectedDb.toFixed(1)} dB</span>
+            </>
+          )}
         </div>
       )}
     </div>

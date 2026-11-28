@@ -2,8 +2,12 @@ import { SECURITY_LIMITS } from '../security/fileValidator';
 import type { HeaderMetadata } from './types';
 
 export interface SelectedAudioSegments {
-  monoSamples: Float32Array;
-  diffSamples: Float32Array | null;
+  /** Left channel (stereo) or mono/downmix PCM packed segment-by-segment. */
+  leftSamples: Float32Array;
+  /** Right channel for stereo tracks (null for mono/multichannel), packed identically. */
+  rightSamples: Float32Array | null;
+  /** Exact sample length of each individual segment so STFT never crosses a splice boundary. */
+  segmentLengthSamples: number;
   analyzedSegments: number;
   analyzedDurationSec: number;
   segmentStartsSec: number[];
@@ -15,26 +19,30 @@ export interface DecodedTrackPayload extends SelectedAudioSegments {
 }
 
 /**
- * Adaptive Transient-Guided Segment Selection (pure, deterministic).
+ * Adaptive Transient-Guided Frame Extraction (pure, deterministic).
  *
- * - For tracks <= 30 s: analyzes the entire track.
- * - For tracks > 30 s: excludes the first/last 5%, scores 1-second windows by
- *   second-order high-pass transient energy (x[n] - 2x[n-1] + x[n-2]) combined
- *   with RMS loudness (ignoring silent or heavily clipped windows), and selects
- *   6 to 8 highest-scoring non-overlapping 4-second segments.
+ * - Preserves separate Left and Right channels for stereo tracks so downstream STFT
+ *   can use max(power_L, power_R) without wide-stereo phase cancellation and compute
+ *   exact Mid/Side ratios.
+ * - For tracks <= 35 s: analyzes the entire track as 1 contiguous segment.
+ * - For tracks > 35 s: excludes outer 5% fades, divides into 1-second blocks,
+ *   filters out silent or severely hard-clipped bursts (|s| >= 0.999, > 25%),
+ *   scores blocks by stereo-aware second-order HF transient energy, and selects
+ *   up to 8 highest-scoring non-overlapping 4-second windows (32 s).
  */
 export function selectAdaptiveTransientSegments(
-  mono: Float32Array,
-  diff: Float32Array | null,
+  left: Float32Array,
+  right: Float32Array | null,
   sampleRate: number,
 ): SelectedAudioSegments {
-  const totalSamples = mono.length;
+  const totalSamples = left.length;
   const totalSec = totalSamples / sampleRate;
 
-  if (totalSec <= 30.5) {
+  if (totalSec <= 35.0) {
     return {
-      monoSamples: mono,
-      diffSamples: diff,
+      leftSamples: left,
+      rightSamples: right,
+      segmentLengthSamples: totalSamples,
       analyzedSegments: 1,
       analyzedDurationSec: totalSec,
       segmentStartsSec: [0],
@@ -45,16 +53,20 @@ export function selectAdaptiveTransientSegments(
   const segSamples = Math.floor(segDurationSec * sampleRate);
   const oneSecSamples = Math.max(256, Math.floor(sampleRate));
 
-  // Exclude first and last 5% on tracks > 30 s
+  // Exclude outer 5% fades on tracks > 30 s
   const trimStart = Math.floor(totalSamples * 0.05);
-  const trimEnd = Math.max(trimStart + segSamples, Math.floor(totalSamples * 0.95));
+  const trimEnd = Math.max(
+    trimStart + segSamples,
+    Math.floor(totalSamples * 0.95),
+  );
 
-  interface CandidateWindow {
+  interface CandidateBlock {
     startSample: number;
     score: number;
   }
 
-  const candidates: CandidateWindow[] = [];
+  const candidates: CandidateBlock[] = [];
+  const hasStereo = right !== null && right.length >= totalSamples;
 
   for (
     let start = trimStart;
@@ -67,12 +79,23 @@ export function selectAdaptiveTransientSegments(
     const end = start + oneSecSamples;
 
     for (let i = start; i < end; i++) {
-      const s = mono[i];
-      sumSq += s * s;
-      if (Math.abs(s) >= 0.995) clippedCount++;
-      if (i >= start + 2) {
-        const hp = s - 2 * mono[i - 1] + mono[i - 2];
-        hfDiffSq += hp * hp;
+      const sL = left[i];
+      if (hasStereo && right) {
+        const sR = right[i];
+        sumSq += 0.5 * (sL * sL + sR * sR);
+        if (Math.abs(sL) >= 0.999 || Math.abs(sR) >= 0.999) clippedCount++;
+        if (i >= start + 2) {
+          const hpL = sL - 2 * left[i - 1] + left[i - 2];
+          const hpR = sR - 2 * right[i - 1] + right[i - 2];
+          hfDiffSq += 0.5 * (hpL * hpL + hpR * hpR);
+        }
+      } else {
+        sumSq += sL * sL;
+        if (Math.abs(sL) >= 0.999) clippedCount++;
+        if (i >= start + 2) {
+          const hp = sL - 2 * left[i - 1] + left[i - 2];
+          hfDiffSq += hp * hp;
+        }
       }
     }
 
@@ -80,29 +103,26 @@ export function selectAdaptiveTransientSegments(
     const rmsDb = rms > 1e-7 ? 20 * Math.log10(rms) : -140;
     const clipRatio = clippedCount / oneSecSamples;
 
-    // Ignore near-silent passages and severely clipped bursts
-    if (rmsDb < -55 || clipRatio > 0.05) {
+    // Only reject silent passages or severely hard-clipped bursts (never clean loud masters)
+    if (rmsDb < -55 || clipRatio > 0.25) {
       continue;
     }
 
     const hfRms = Math.sqrt(hfDiffSq / Math.max(1, oneSecSamples - 2));
     const hfDb = hfRms > 1e-8 ? 20 * Math.log10(hfRms) : -160;
-    // Combine HF transient strength (primary) with healthy loudness (secondary)
-    const score = hfDb * 0.72 + rmsDb * 0.28;
+    const score = hfDb * 0.78 + rmsDb * 0.22;
     candidates.push({ startSample: start, score });
   }
 
-  const targetCount = totalSec >= 120 ? 8 : 6;
+  const targetCount = 8;
   const chosenStarts: number[] = [];
 
-  // Sort candidates descending by transient score and pick non-overlapping 4s windows
   candidates.sort((a, b) => b.score - a.score);
   for (const cand of candidates) {
     if (chosenStarts.length >= targetCount) break;
-    // Center the 4-second segment around the high-transient 1s window
     const segStart = Math.max(
-      0,
-      Math.min(totalSamples - segSamples, cand.startSample - Math.floor(sampleRate * 1.5)),
+      trimStart,
+      Math.min(trimEnd - segSamples, cand.startSample - Math.floor(sampleRate * 1.5)),
     );
     const overlaps = chosenStarts.some(
       (existing) => Math.abs(existing - segStart) < segSamples,
@@ -112,10 +132,11 @@ export function selectAdaptiveTransientSegments(
     }
   }
 
-  // Fallback if entire track is extremely quiet: evenly spaced segments
+  // Fallback for very quiet tracks: evenly distributed 4-second windows
   if (chosenStarts.length === 0) {
-    const count = Math.min(targetCount, Math.max(1, Math.floor((trimEnd - trimStart) / segSamples)));
-    const span = Math.max(1, trimEnd - trimStart - segSamples);
+    const maxFits = Math.max(1, Math.floor((trimEnd - trimStart) / segSamples));
+    const count = Math.min(targetCount, maxFits);
+    const span = Math.max(0, trimEnd - trimStart - segSamples);
     for (let i = 0; i < count; i++) {
       const frac = count === 1 ? 0.5 : i / (count - 1);
       chosenStarts.push(Math.floor(trimStart + span * frac));
@@ -125,21 +146,22 @@ export function selectAdaptiveTransientSegments(
   chosenStarts.sort((a, b) => a - b);
 
   const packedLength = chosenStarts.length * segSamples;
-  const monoOut = new Float32Array(packedLength);
-  const diffOut = diff ? new Float32Array(packedLength) : null;
+  const leftOut = new Float32Array(packedLength);
+  const rightOut = hasStereo && right ? new Float32Array(packedLength) : null;
 
   for (let i = 0; i < chosenStarts.length; i++) {
     const srcStart = chosenStarts[i];
     const dstStart = i * segSamples;
-    monoOut.set(mono.subarray(srcStart, srcStart + segSamples), dstStart);
-    if (diff && diffOut) {
-      diffOut.set(diff.subarray(srcStart, srcStart + segSamples), dstStart);
+    leftOut.set(left.subarray(srcStart, srcStart + segSamples), dstStart);
+    if (hasStereo && right && rightOut) {
+      rightOut.set(right.subarray(srcStart, srcStart + segSamples), dstStart);
     }
   }
 
   return {
-    monoSamples: monoOut,
-    diffSamples: diffOut,
+    leftSamples: leftOut,
+    rightSamples: rightOut,
+    segmentLengthSamples: segSamples,
     analyzedSegments: chosenStarts.length,
     analyzedDurationSec: packedLength / sampleRate,
     segmentStartsSec: chosenStarts.map((s) => Number((s / sampleRate).toFixed(2))),
@@ -165,7 +187,8 @@ function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise
 }
 
 /**
- * Decode validated audio file with resampling awareness and immediate AudioBuffer release.
+ * Decode validated audio file with resampling awareness, zero buffer-duplication RAM spikes,
+ * preserved stereo channels, and immediate AudioBuffer release.
  */
 export async function decodeAudioAndSelectSegments(
   file: File,
@@ -178,18 +201,25 @@ export async function decodeAudioAndSelectSegments(
     'Reading file buffer',
   );
 
-  // Clamp requested context sample rate to typical browser bounds (8 kHz - 96 kHz)
+  // Clamp requested context sample rate to safe browser bounds (8–96 kHz)
   const targetSr = Math.max(8000, Math.min(96000, metadata.sampleRate || 44100));
 
   let audioBuffer: AudioBuffer | null = null;
   try {
     const offline = new OfflineAudioContext(1, 1, targetSr);
+    // Transfer rawBuffer directly without cloning to avoid doubling peak RAM
     audioBuffer = await withTimeout(
-      offline.decodeAudioData(rawBuffer.slice(0)),
+      offline.decodeAudioData(rawBuffer),
       timeoutMs,
       'Audio decoding',
     );
   } catch {
+    // Only re-read from File inside the rare fallback path if OfflineAudioContext rejected/detached rawBuffer
+    const fallbackBuffer = await withTimeout(
+      file.arrayBuffer(),
+      timeoutMs,
+      'Reading file buffer',
+    );
     const AudioCtx =
       window.AudioContext ||
       (window as unknown as { webkitAudioContext: typeof AudioContext })
@@ -197,7 +227,7 @@ export async function decodeAudioAndSelectSegments(
     const ctx = new AudioCtx();
     try {
       audioBuffer = await withTimeout(
-        ctx.decodeAudioData(rawBuffer.slice(0)),
+        ctx.decodeAudioData(fallbackBuffer),
         timeoutMs,
         'Audio decoding',
       );
@@ -222,36 +252,30 @@ export async function decodeAudioAndSelectSegments(
     );
   }
 
-  // Compute mono mix and lightweight stereo difference (L - R) immediately
-  let mono: Float32Array;
-  let diff: Float32Array | null = null;
+  // Preserve Left & Right separately for stereo; downmix multichannel (>2 ch) to mono
+  let left: Float32Array;
+  let right: Float32Array | null = null;
 
   if (decodedChannels === 1) {
-    mono = new Float32Array(audioBuffer.getChannelData(0));
+    left = new Float32Array(audioBuffer.getChannelData(0));
   } else if (decodedChannels === 2) {
-    const ch0 = audioBuffer.getChannelData(0);
-    const ch1 = audioBuffer.getChannelData(1);
-    mono = new Float32Array(decodedLength);
-    diff = new Float32Array(decodedLength);
-    for (let i = 0; i < decodedLength; i++) {
-      mono[i] = (ch0[i] + ch1[i]) * 0.5;
-      diff[i] = (ch0[i] - ch1[i]) * 0.5;
-    }
+    left = new Float32Array(audioBuffer.getChannelData(0));
+    right = new Float32Array(audioBuffer.getChannelData(1));
   } else {
-    mono = new Float32Array(decodedLength);
+    left = new Float32Array(decodedLength);
     const inv = 1 / decodedChannels;
     for (let ch = 0; ch < decodedChannels; ch++) {
       const data = audioBuffer.getChannelData(ch);
       for (let i = 0; i < decodedLength; i++) {
-        mono[i] += data[i] * inv;
+        left[i] += data[i] * inv;
       }
     }
   }
 
-  // Aggressively release AudioBuffer reference immediately so GC can reclaim full-track memory
+  // Release AudioBuffer reference immediately to keep memory lean
   audioBuffer = null;
 
-  const selected = selectAdaptiveTransientSegments(mono, diff, decodedSampleRate);
+  const selected = selectAdaptiveTransientSegments(left, right, decodedSampleRate);
 
   const exactDuration =
     metadata.duration > 0 && metadata.totalSamples !== null

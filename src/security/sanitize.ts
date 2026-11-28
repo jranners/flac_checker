@@ -5,7 +5,6 @@ import type { QueueItem } from '../dsp/types';
  * and path traversal prefixes, clamping display length while preserving extension.
  */
 export function sanitizeFilename(rawName: string, maxLength = 120): string {
-  // Remove path directory components if someone crafts a weird name
   const base = rawName.split(/[\\/]/).pop() ?? rawName;
 
   // Strip ASCII control characters (0x00-0x1F, 0x7F) and Unicode BiDi controls:
@@ -65,6 +64,7 @@ export function exportQueueToCsv(items: QueueItem[]): string {
     'Sub-Label',
     'Confidence (%)',
     'Cutoff (kHz)',
+    'Cutoff Lock IQR (Hz)',
     'Estimated Source',
     'Container',
     'Codec',
@@ -75,11 +75,14 @@ export function exportQueueToCsv(items: QueueItem[]): string {
     'Duration (s)',
     'File Size (bytes)',
     'FLAC MD5',
-    'Cliff Slope (dB/kHz)',
+    'Natural Slope 4-13k (dB/kHz)',
+    'Excess Residual Drop (dB)',
     'Dead-Zone Floor (dBFS)',
-    'Spectral Holes (%)',
+    'Dither/Noise-Shaping',
+    'MDCT Spectral Holes (%)',
     '16 kHz Shelf Drop (dB)',
     'HF Stereo Collapse (dB)',
+    'Evidence Score',
     'Reasoning / Rejection Reason',
   ];
 
@@ -98,6 +101,7 @@ export function exportQueueToCsv(items: QueueItem[]): string {
           r.subLabel ?? '',
           r.confidence,
           r.cutoffKhz !== null ? r.cutoffKhz.toFixed(2) : '',
+          f.cutoffIQRHz !== null ? Math.round(f.cutoffIQRHz) : '',
           r.estimatedSource,
           m.container,
           m.codecHint,
@@ -108,11 +112,14 @@ export function exportQueueToCsv(items: QueueItem[]): string {
           m.duration.toFixed(2),
           item.fileSize,
           m.md5Hash ?? '',
-          f.cliffSlopeDbPerKhz.toFixed(2),
+          f.naturalSlopeDbPerKhz.toFixed(2),
+          f.excessResidualDb.toFixed(2),
           f.deadZoneFloorDb.toFixed(1),
+          f.ditherDetected ? 'Detected' : 'None',
           f.spectralHolePercent.toFixed(2),
           f.shelf16KhzDropDb.toFixed(2),
           f.hfStereoCollapseDb !== null ? f.hfStereoCollapseDb.toFixed(2) : '',
+          f.evidenceScore.toFixed(2),
           r.reasoning,
         ]
           .map((cell) => sanitizeCsvCell(cell))
@@ -135,7 +142,11 @@ export function exportQueueToCsv(items: QueueItem[]): string {
           '',
           '',
           '',
+          '',
           item.fileSize,
+          '',
+          '',
+          '',
           '',
           '',
           '',

@@ -1,9 +1,20 @@
 export type Verdict =
   | 'GENUINE_LOSSLESS'
   | 'UPSAMPLED_LOSSLESS'
-  | 'SUSPICIOUS'
+  | 'INCONCLUSIVE'
   | 'FAKE_TRANSCODE'
   | 'LOSSY_FORMAT';
+
+export type ForensicImpact = 'positive' | 'negative' | 'neutral';
+
+export interface ForensicFactor {
+  id: string;
+  signal: string;
+  measuredValue: string;
+  detail: string;
+  impact: ForensicImpact;
+  weight: number;
+}
 
 export type AudioContainerFormat = 'FLAC' | 'WAV' | 'AIFF' | 'MP3' | 'M4A' | 'OGG';
 
@@ -25,13 +36,19 @@ export interface HeaderMetadata {
 }
 
 export interface ForensicMetrics {
+  naturalSlopeDbPerKhz: number;
+  excessResidualDb: number;
   cliffSlopeDbPerKhz: number;
+  frameCutoffMedianKhz: number | null;
+  cutoffIQRHz: number | null;
   deadZoneFloorDb: number;
-  temporalVarianceDropDb: number;
   aboveCutoffStdDb: number;
+  ditherDetected: boolean;
+  ditherNote: string;
   referenceBand8To13KhzDb: number;
   coreBand1To5KhzDb: number;
   spectralHolePercent: number;
+  broadBandZeroingPercent: number;
   shelf16KhzDropDb: number;
   has16KhzShelf: boolean;
   hfStereoCollapseDb: number | null;
@@ -44,6 +61,7 @@ export interface ForensicMetrics {
   analyzedSegments: number;
   analyzedDurationSec: number;
   fftSize: number;
+  evidenceScore: number;
 }
 
 export interface SpectrogramData {
@@ -61,6 +79,7 @@ export interface PsdCurveData {
   meanDb: Float32Array;
   medianDb: Float32Array;
   p95Db: Float32Array;
+  expectedDb: Float32Array;
 }
 
 export interface AnalysisResult {
@@ -72,12 +91,19 @@ export interface AnalysisResult {
   reasoning: string;
   metadata: HeaderMetadata;
   metrics: ForensicMetrics;
+  evidenceFactors: ForensicFactor[];
   securityChecks: string[];
   spectrogram: SpectrogramData;
   psdCurve: PsdCurveData;
 }
 
-export type QueueItemState = 'queued' | 'validating' | 'analyzing' | 'done' | 'rejected' | 'error';
+export type QueueItemState =
+  | 'queued'
+  | 'validating'
+  | 'analyzing'
+  | 'done'
+  | 'rejected'
+  | 'error';
 
 export interface QueueItem {
   id: string;
@@ -94,49 +120,44 @@ export interface VerdictDisplayMeta {
   title: string;
   shortLabel: string;
   accentHex: string;
-  badgeClass: string;
   dotClass: string;
+  textClass: string;
 }
 
 export const VERDICT_META: Record<Verdict, VerdictDisplayMeta> = {
   GENUINE_LOSSLESS: {
     title: 'Genuine Lossless',
     shortLabel: 'Genuine',
-    accentHex: '#30D158',
-    badgeClass:
-      'bg-[#30D158]/14 text-[#1E8E3E] dark:text-[#30D158] border border-[#30D158]/25',
-    dotClass: 'bg-[#30D158]',
+    accentHex: '#22C55E',
+    dotClass: 'bg-emerald-500',
+    textClass: 'text-emerald-600 dark:text-emerald-400',
   },
   UPSAMPLED_LOSSLESS: {
     title: 'Upsampled Lossless',
     shortLabel: 'Upsampled',
-    accentHex: '#0A84FF',
-    badgeClass:
-      'bg-[#0A84FF]/14 text-[#0066CC] dark:text-[#64D2FF] border border-[#0A84FF]/25',
-    dotClass: 'bg-[#0A84FF] dark:bg-[#64D2FF]',
+    accentHex: '#0EA5E9',
+    dotClass: 'bg-sky-500',
+    textClass: 'text-sky-600 dark:text-sky-400',
   },
-  SUSPICIOUS: {
-    title: 'Suspicious',
-    shortLabel: 'Suspicious',
-    accentHex: '#FF9F0A',
-    badgeClass:
-      'bg-[#FF9F0A]/15 text-[#B26A00] dark:text-[#FF9F0A] border border-[#FF9F0A]/25',
-    dotClass: 'bg-[#FF9F0A]',
+  INCONCLUSIVE: {
+    title: 'Inconclusive',
+    shortLabel: 'Inconclusive',
+    accentHex: '#F59E0B',
+    dotClass: 'bg-amber-500',
+    textClass: 'text-amber-600 dark:text-amber-400',
   },
   FAKE_TRANSCODE: {
     title: 'Fake Transcode',
     shortLabel: 'Transcode',
-    accentHex: '#FF453A',
-    badgeClass:
-      'bg-[#FF453A]/14 text-[#C92A22] dark:text-[#FF453A] border border-[#FF453A]/25',
-    dotClass: 'bg-[#FF453A]',
+    accentHex: '#EF4444',
+    dotClass: 'bg-red-500',
+    textClass: 'text-red-600 dark:text-red-400',
   },
   LOSSY_FORMAT: {
     title: 'Lossy Format',
     shortLabel: 'Lossy',
-    accentHex: '#8E8E93',
-    badgeClass:
-      'bg-[#8E8E93]/16 text-[#55555B] dark:text-[#AEAEB2] border border-[#8E8E93]/25',
-    dotClass: 'bg-[#8E8E93]',
+    accentHex: '#71717A',
+    dotClass: 'bg-zinc-500',
+    textClass: 'text-zinc-600 dark:text-zinc-400',
   },
 };

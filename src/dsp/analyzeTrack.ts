@@ -86,14 +86,13 @@ class ForensicWorkerManager {
 
     const id = `job-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     // Clone input buffers before transferring so we can seamlessly retry on main thread if sandbox blocks worker startup
-    const monoCopy = new Float32Array(input.monoSamples);
-    const diffCopy = input.diffSamples ? new Float32Array(input.diffSamples) : null;
+    const leftCopy = new Float32Array(input.leftSamples);
+    const rightCopy = input.rightSamples ? new Float32Array(input.rightSamples) : null;
 
     try {
       return await new Promise<AnalysisResult>((resolve, reject) => {
         const timer = window.setTimeout(() => {
           this.pending.delete(id);
-          // Automatically terminate stalled worker so next file gets a fresh worker instance
           this.resetWorker(
             `Analysis timed out after ${Math.round(timeoutMs / 1000)} seconds.`,
           );
@@ -106,9 +105,9 @@ class ForensicWorkerManager {
 
         this.pending.set(id, { resolve, reject, timer });
 
-        const transferables: Transferable[] = [input.monoSamples.buffer];
-        if (input.diffSamples) {
-          transferables.push(input.diffSamples.buffer);
+        const transferables: Transferable[] = [input.leftSamples.buffer];
+        if (input.rightSamples) {
+          transferables.push(input.rightSamples.buffer);
         }
 
         const request: DspWorkerRequest = { id, payload: input };
@@ -118,8 +117,8 @@ class ForensicWorkerManager {
       if (this.workerUnavailable) {
         return this.executeMainThreadChunked({
           ...input,
-          monoSamples: monoCopy,
-          diffSamples: diffCopy,
+          leftSamples: leftCopy,
+          rightSamples: rightCopy,
         });
       }
       throw err;
@@ -129,7 +128,6 @@ class ForensicWorkerManager {
   private async executeMainThreadChunked(
     input: ForensicDspInput,
   ): Promise<AnalysisResult> {
-    // Yield to browser paint loop before and after DSP execution to keep UI responsive
     await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
     const result = runForensicAnalysis(input);
     await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
@@ -148,7 +146,7 @@ export interface TrackProgressCallbacks {
  * Full end-to-end client-side forensic pipeline for a single untrusted File:
  * 1. Zero-trust 64 KB header magic-byte, bounds & RAM-bomb validation
  * 2. Raw PCM 24-bit zero-padding verification (WAV)
- * 3. Resampling-aware Web Audio decode + adaptive transient segment selection
+ * 3. Resampling-aware Web Audio decode + segment-isolated stereo transient extraction
  * 4. Multi-feature spectral forensics in Web Worker (with automatic main-thread fallback)
  */
 export async function analyzeAudioFile(
@@ -172,8 +170,9 @@ export async function analyzeAudioFile(
   callbacks.onStage?.('Running spectral forensics…');
   return workerManager.execute(
     {
-      monoSamples: decoded.monoSamples,
-      diffSamples: decoded.diffSamples,
+      leftSamples: decoded.leftSamples,
+      rightSamples: decoded.rightSamples,
+      segmentLengthSamples: decoded.segmentLengthSamples,
       decodedSampleRate: decoded.decodedSampleRate,
       metadata: decoded.updatedMetadata,
       securityChecks: validated.securityChecks,

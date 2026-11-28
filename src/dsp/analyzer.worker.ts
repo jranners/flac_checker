@@ -25,6 +25,7 @@ self.onmessage = (event: MessageEvent<DspWorkerRequest>) => {
       result.psdCurve.meanDb.buffer,
       result.psdCurve.medianDb.buffer,
       result.psdCurve.p95Db.buffer,
+      result.psdCurve.expectedDb.buffer,
     ];
     self.postMessage(response, { transfer: transferables });
   } catch (err) {
